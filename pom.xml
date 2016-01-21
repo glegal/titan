@@ -1554,4 +1554,14 @@
         </profile>
         -->
     </profiles>
+
+    <!-- Server where to deploy the web site. -->
+    <distributionManagement>
+        <repository>
+            <id>oceano-snapshot</id>
+            <name>Repository maven geomatys oceanotron</name>
+            <url>file:///var/www/maven.geomatys.com</url>
+            <uniqueVersion>false</uniqueVersion>
+        </repository>
+    </distributionManagement>
 </project>
