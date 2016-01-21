@@ -312,6 +312,14 @@ public class LuceneIndex implements IndexProvider {
                 geofields.put(e.field, shape);
                 doc.add(new StoredField(e.field, GEOID + ctx.toString(shape)));
 
+            } else if (e.value instanceof Date) {
+                doc.add(new LongField(e.field, (((Date) e.value).getTime()), Field.Store.YES));
+            } else if (e.value instanceof Boolean) {
+                doc.add(new IntField(e.field, ((Boolean)e.value)? 1 : 0, Field.Store.YES));
+            } else if (e.value instanceof UUID) {
+                //Solr stores UUIDs as strings, we we do the same.
+                Field field = new StringField(e.field, e.value.toString(), Field.Store.YES);
+                doc.add(field);
             } else {
                 throw new IllegalArgumentException("Unsupported type: " + e.value);
             }
@@ -453,7 +461,38 @@ public class LuceneIndex implements IndexProvider {
                 Shape shape = ((Geoshape) value).convert2Spatial4j();
                 SpatialArgs args = new SpatialArgs(SpatialOperation.IsWithin, shape);
                 return getSpatialStrategy(key).makeFilter(args);
-            } else throw new IllegalArgumentException("Unsupported type: " + value);
+            } else if (value instanceof Date) {
+                Preconditions.checkArgument(titanPredicate instanceof Cmp, "Relation not supported on date types: " + titanPredicate);
+                return numericFilter(key, (Cmp) titanPredicate, ((Date) value).getTime());
+            } else if (value instanceof Boolean) {
+                Preconditions.checkArgument(titanPredicate instanceof Cmp, "Relation not supported on boolean types: " + titanPredicate);
+                int intValue;
+                switch ((Cmp)titanPredicate) {
+                    case EQUAL:
+                        intValue = ((Boolean) value) ? 1 : 0;
+                        return NumericRangeFilter.newIntRange(key, intValue, intValue, true, true);
+                    case NOT_EQUAL:
+                        intValue = ((Boolean) value) ? 0 : 1;
+                        return NumericRangeFilter.newIntRange(key, intValue, intValue, true, true);
+                    default:
+                        throw new IllegalArgumentException("Boolean types only support EQUAL or NOT_EQUAL");
+                }
+
+            } else if (value instanceof UUID) {
+                Preconditions.checkArgument(titanPredicate instanceof Cmp, "Relation not supported on UUID types: " + titanPredicate);
+                if (titanPredicate == Cmp.EQUAL) {
+                    return new TermsFilter(new Term(key, value.toString()));
+                } else if (titanPredicate == Cmp.NOT_EQUAL) {
+                    BooleanFilter q = new BooleanFilter();
+                    q.add(new TermsFilter(new Term(key, value.toString())), BooleanClause.Occur.MUST_NOT);
+                    return q;
+                } else {
+                    throw new IllegalArgumentException("Relation is not supported for UUID type: " + titanPredicate);
+                }
+
+            } else {
+                throw new IllegalArgumentException("Unsupported type: " + value);
+            }
         } else if (condition instanceof Not) {
             BooleanFilter q = new BooleanFilter();
             q.add(convertQuery(((Not) condition).getChild(),informations), BooleanClause.Occur.MUST_NOT);
@@ -528,6 +567,12 @@ public class LuceneIndex implements IndexProvider {
                 case STRING:
                     return titanPredicate == Cmp.EQUAL || titanPredicate==Cmp.NOT_EQUAL || titanPredicate==Text.PREFIX; //  || titanPredicate==Text.REGEX
             }
+        } else if (dataType == Date.class) {
+            if (titanPredicate instanceof Cmp) return true;
+        } else if (dataType == Boolean.class) {
+            return titanPredicate == Cmp.EQUAL || titanPredicate == Cmp.NOT_EQUAL;
+        } else if (dataType == UUID.class) {
+            return titanPredicate == Cmp.EQUAL || titanPredicate == Cmp.NOT_EQUAL;
         }
         return false;
     }
@@ -537,7 +582,7 @@ public class LuceneIndex implements IndexProvider {
         if (information.getCardinality()!= Cardinality.SINGLE) return false;
         Class<?> dataType = information.getDataType();
         Mapping mapping = Mapping.getMapping(information);
-        if (Number.class.isAssignableFrom(dataType) || dataType == Geoshape.class) {
+        if (Number.class.isAssignableFrom(dataType) || dataType == Geoshape.class || dataType == Date.class || dataType == Boolean.class || dataType == UUID.class) {
             if (mapping==Mapping.DEFAULT) return true;
         } else if (AttributeUtil.isString(dataType)) {
             if (mapping==Mapping.DEFAULT || mapping==Mapping.STRING || mapping==Mapping.TEXT) return true;
